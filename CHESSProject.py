@@ -3,7 +3,36 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-import numpy as np
+import sqlite3
+
+# Veritabanına bağlanma
+def connect_db():
+    conn = sqlite3.connect('chess_game_results.db')  # Veritabanı dosyasının adı
+    return conn
+
+# Veritabanından sonuç almak
+def get_result_from_db(white_pieces, black_pieces):
+    # Veritabanına bağlan
+    conn = connect_db()
+    cursor = conn.cursor()
+
+    # İlk 7 taşın sonucu veritabanından almak için sorgu
+    cursor.execute("""
+        SELECT result FROM game_results 
+        WHERE white_pieces = ? AND black_pieces = ? 
+        LIMIT 1
+    """, (white_pieces, black_pieces))
+
+    # Sonucu al
+    result = cursor.fetchone()
+
+    # Veritabanından sonucu alırsak, sonucu döndür
+    if result:
+        conn.close()
+        return result[0]
+    else:
+        conn.close()
+        return None  # Eğer veri yoksa, None döndür
 
 # Tahtadaki taşların gelişim durumuna göre özellikleri çıkarma
 def get_board_features(board):
@@ -38,23 +67,36 @@ def parse_pgn(pgn_file_path):
                 break
 
             board = chess.Board()
-            # Tahtadaki taşların gelişim durumunu almak
-            features = get_board_features(board)
 
-            # Oyun sonucunu al (1: Beyaz kazandı, -1: Siyah kazandı, 0: Beraberlik)
-            result = game.headers['Result']
-            if result == '1-0':
-                label = 2  # Beyaz kazandı
-                winner = "Beyaz"
-            elif result == '0-1':
-                label = 0  # Siyah kazandı
-                winner = "Siyah"
+            # İlk 7 taş için veritabanından sonucu almak
+            white_pieces = len(board.pieces(chess.PAWN, chess.WHITE)) + len(board.pieces(chess.KNIGHT, chess.WHITE)) + \
+                            len(board.pieces(chess.BISHOP, chess.WHITE)) + len(board.pieces(chess.ROOK, chess.WHITE)) + \
+                            len(board.pieces(chess.QUEEN, chess.WHITE))
+            black_pieces = len(board.pieces(chess.PAWN, chess.BLACK)) + len(board.pieces(chess.KNIGHT, chess.BLACK)) + \
+                            len(board.pieces(chess.BISHOP, chess.BLACK)) + len(board.pieces(chess.ROOK, chess.BLACK)) + \
+                            len(board.pieces(chess.QUEEN, chess.BLACK))
+
+            # Veritabanında ilk 7 taş için sonucu kontrol et
+            result_from_db = get_result_from_db(white_pieces, black_pieces)
+            if result_from_db is not None:
+                # Eğer veritabanında sonuç varsa, onu al
+                label = result_from_db
+                winner = "Beyaz" if label == 2 else "Siyah" if label == 0 else "Beraberlik"
+                games.append([white_pieces, black_pieces, label, winner])
             else:
-                label = 1  # Beraberlik
-                winner = "Beraberlik"
-
-            # Özellikleri ve etiketi listeye ekle
-            games.append(features + [label, winner])
+                # Eğer veritabanında sonuç yoksa, model ile tahmin yap
+                features = get_board_features(board)
+                result = game.headers['Result']
+                if result == '1-0':
+                    label = 2
+                    winner = "Beyaz"
+                elif result == '0-1':
+                    label = 0
+                    winner = "Siyah"
+                else:
+                    label = 1
+                    winner = "Beraberlik"
+                games.append(features + [label, winner])
 
     return games
 
